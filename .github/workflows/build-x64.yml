@@ -1,0 +1,74 @@
+name: Build x86_64 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  build-x64:
+    name: Build Android x86_64 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "25"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go_backend/go.mod
+          cache-dependency-path: go_backend/go.sum
+
+      - name: Install Android SDK & NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;29.0.14206865" "platforms;android-37.0" "build-tools;37.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
+
+      - name: Build Go backend for Android (x86_64)
+        working-directory: go_backend
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile
+          gomobile init
+          mkdir -p ../android/app/libs
+          gomobile bind -target=android/arm,android/arm64,android/x86_64 -androidapi 24 -o ../android/app/libs/gobackend.aar .
+        env:
+          CGO_ENABLED: 1
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Generate app icons
+        run: dart run flutter_launcher_icons
+
+      - name: Build APK (Release x86_64)
+        run: |
+          BUILD_GIT_COMMIT="$(git rev-parse --short=8 HEAD)"
+          flutter build apk --release --split-per-abi --target-platform android-x64 --dart-define="GIT_COMMIT=$BUILD_GIT_COMMIT"
+          ls -la build/app/outputs/flutter-apk/
+
+      - name: Upload x86_64 APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotiFLAC-x86_64-APK
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
